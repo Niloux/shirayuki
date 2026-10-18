@@ -21,6 +21,10 @@ nonisolated struct AgentToolCatalog: AgentToolCallParsing {
         do {
             let callID = try Self.identifier(call.id)
             guard let spec = specs[call.name] else { throw AgentToolParseError.unknownTool }
+            if (call.name == "commentPage" || call.name == "mutateComment"),
+               call.arguments.utf8.count > 96 * 1024 {
+                throw AgentToolParseError.valueOutOfRange
+            }
             let object = try Self.object(call.arguments)
             let keys = Set(object.keys)
             guard keys.isSubset(of: spec.allowedKeys) else { throw AgentToolParseError.unknownArgument }
@@ -40,6 +44,30 @@ nonisolated struct AgentToolCatalog: AgentToolCallParsing {
             empty("currentUser", schema: emptySchema, command: .currentUser),
             empty("offlineLibrary", schema: emptySchema, command: .offlineLibrary),
             empty("currentPageContent", schema: emptySchema, command: .currentPageContent),
+            spec(
+                "commentPage",
+                schema: #"{"type":"object","properties":{"comic_id":{"type":"string","minLength":1,"maxLength":128},"parent_id":{"type":"string","minLength":1,"maxLength":128},"page":{"type":"integer","minimum":1,"maximum":1000}},"required":["comic_id","page"],"additionalProperties":false}"#,
+                allowed: ["comic_id", "parent_id", "page"],
+                required: ["comic_id", "page"]
+            ) { call in
+                let value: CommentPageArguments = try decode(call)
+                guard (1...1_000).contains(value.page) else {
+                    throw AgentToolParseError.valueOutOfRange
+                }
+                return .commentPage(
+                    comicID: try identifier(value.comicID),
+                    parentID: try value.parentID.map(identifier),
+                    page: value.page
+                )
+            },
+            spec(
+                "mutateComment",
+                schema: #"{"type":"object","properties":{"action":{"type":"string","enum":["post","reply","delete","toggleLike","report"]},"comic_id":{"type":"string","minLength":1,"maxLength":128},"comment_id":{"type":"string","minLength":1,"maxLength":128},"content":{"type":"string","minLength":1,"maxLength":2000}},"required":["action","comic_id"],"additionalProperties":false}"#,
+                allowed: ["action", "comic_id", "comment_id", "content"],
+                required: ["action", "comic_id"]
+            ) { call in
+                try commentMutation(call)
+            },
             empty("listBlockedWords", schema: emptySchema, command: .listBlockedWords),
             empty("listIncludedWords", schema: emptySchema, command: .listIncludedWords),
             spec(
@@ -193,6 +221,54 @@ nonisolated struct AgentToolCatalog: AgentToolCallParsing {
             return spec
         }
     }
+    private static func commentMutation(_ call: AgentLLMToolCall) throws -> AgentCommand {
+        let object = try object(call.arguments)
+        guard let action = object["action"] as? String,
+              let rawComicID = object["comic_id"] as? String else {
+            throw AgentToolParseError.invalidType
+        }
+        let comicID = try identifier(rawComicID)
+        let commentID = try (object["comment_id"] as? String).map(identifier)
+        let content = try (object["content"] as? String).map(commentContent)
+        if object.keys.contains("comment_id"), commentID == nil {
+            throw AgentToolParseError.invalidType
+        }
+        if object.keys.contains("content"), content == nil {
+            throw AgentToolParseError.invalidType
+        }
+        switch action {
+        case "post":
+            guard commentID == nil, let content else { throw AgentToolParseError.invalidValue }
+            return .mutateComment(comicID: comicID, mutation: .post(content: content), commandID: call.id)
+        case "reply":
+            guard let commentID, let content else { throw AgentToolParseError.invalidValue }
+            return .mutateComment(comicID: comicID, mutation: .reply(commentID: commentID, content: content), commandID: call.id)
+        case "delete":
+            guard commentID != nil, content == nil else { throw AgentToolParseError.invalidValue }
+            return .mutateComment(comicID: comicID, mutation: .delete(commentID: commentID!), commandID: call.id)
+        case "toggleLike":
+            guard commentID != nil, content == nil else { throw AgentToolParseError.invalidValue }
+            return .mutateComment(comicID: comicID, mutation: .toggleLike(commentID: commentID!), commandID: call.id)
+        case "report":
+            guard commentID != nil, content == nil else { throw AgentToolParseError.invalidValue }
+            return .mutateComment(comicID: comicID, mutation: .report(commentID: commentID!), commandID: call.id)
+        default:
+            throw AgentToolParseError.invalidValue
+        }
+    }
+
+    private static func commentContent(_ raw: String) throws -> String {
+        do {
+            return try CommentInput.validatedContent(raw)
+        } catch let error as CommentOperationError {
+            switch error {
+            case .contentTooLong: throw AgentToolParseError.valueOutOfRange
+            case .emptyContent: throw AgentToolParseError.invalidValue
+            case .invalidIdentifier, .commentingDisabled: throw AgentToolParseError.invalidValue
+            }
+        }
+    }
+
 
     private static func empty(_ name: String, schema: String, command: AgentCommand) -> Spec {
         spec(name, schema: schema, allowed: []) { call in
@@ -272,8 +348,16 @@ nonisolated struct AgentToolCatalog: AgentToolCallParsing {
 
     private static func identifier(_ raw: String) throws -> String {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { throw AgentToolParseError.invalidValue }
-        guard value.count <= 128 else { throw AgentToolParseError.valueOutOfRange }
+        guard (1...128).contains(value.unicodeScalars.count),
+              value.unicodeScalars.allSatisfy({
+                  ($0.value >= 48 && $0.value <= 57)
+                      || ($0.value >= 65 && $0.value <= 90)
+                      || ($0.value >= 97 && $0.value <= 122)
+                      || $0.value == 95
+                      || $0.value == 45
+              }) else {
+            throw AgentToolParseError.invalidValue
+        }
         return value
     }
 
@@ -304,6 +388,14 @@ nonisolated struct AgentToolCatalog: AgentToolCallParsing {
 }
 
 nonisolated private struct EmptyArguments: Decodable {}
+nonisolated private struct CommentPageArguments: Decodable {
+    let comicID: String
+    let parentID: String?
+    let page: Int
+    enum CodingKeys: String, CodingKey {
+        case comicID = "comic_id", parentID = "parent_id", page
+    }
+}
 nonisolated private struct FavoriteArguments: Decodable { let page: Int?; let sort: String? }
 nonisolated private struct DownloadStatusArguments: Decodable {
     let jobID: String?

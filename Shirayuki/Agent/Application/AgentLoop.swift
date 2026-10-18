@@ -5,7 +5,7 @@ nonisolated enum AgentCommandExecution: Sendable {
     case confirmation(AgentConfirmationPreview)
 }
 
-protocol AgentLoopCommandExecutor: Sendable {
+nonisolated protocol AgentLoopCommandExecutor: Sendable {
     func execute(
         _ command: AgentCommand,
         sessionID: UUID,

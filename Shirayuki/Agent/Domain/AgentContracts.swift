@@ -102,6 +102,94 @@ nonisolated struct AgentUserSnapshot: Equatable, Sendable {
     let favoriteCount: Int?
 }
 
+/// Small, redacted comment data safe for model projection.
+nonisolated struct AgentCommentSnapshot: Equatable, Sendable {
+    let commentID: String
+    let parentID: String?
+    let displayName: String
+    let content: String
+    let createdAt: String
+    let likesCount: Int
+    let repliesCount: Int
+    let isTop: Bool
+    let isHidden: Bool
+
+    init(
+        commentID: String,
+        parentID: String?,
+        displayName: String,
+        content: String,
+        createdAt: String,
+        likesCount: Int,
+        repliesCount: Int,
+        isTop: Bool,
+        isHidden: Bool
+    ) {
+        self.commentID = Self.boundedIdentifier(commentID)
+        self.isHidden = isHidden
+        if isHidden {
+            self.parentID = nil
+            self.displayName = ""
+            self.content = ""
+            self.createdAt = ""
+            self.likesCount = 0
+            self.repliesCount = 0
+            self.isTop = false
+        } else {
+            self.parentID = parentID.map(Self.boundedIdentifier)
+            self.displayName = Self.boundedText(displayName, maxBytes: 800, maxCharacters: 200)
+            self.content = Self.boundedText(content, maxBytes: 4_096, maxCharacters: 1_000)
+            self.createdAt = Self.boundedText(createdAt, maxBytes: 128, maxCharacters: 128)
+            self.likesCount = max(0, likesCount)
+            self.repliesCount = max(0, repliesCount)
+            self.isTop = isTop
+        }
+    }
+
+    static func boundedIdentifier(_ value: String) -> String {
+        let candidate = boundedText(value, maxBytes: 128, maxCharacters: 128)
+        return (try? CommentInput.validateIdentifier(candidate)) == nil ? "" : candidate
+    }
+
+    static func boundedText(
+        _ value: String,
+        maxBytes: Int,
+        maxCharacters: Int
+    ) -> String {
+        let bytes = Array(value.utf8.prefix(maxBytes))
+        var bounded = String(decoding: bytes, as: UTF8.self)
+        while bounded.utf8.count > maxBytes, !bounded.isEmpty {
+            bounded.removeLast()
+        }
+        return String(bounded.prefix(maxCharacters))
+}
+}
+
+nonisolated struct AgentCommentPageSnapshot: Equatable, Sendable {
+    let comicID: String
+    let parentID: String?
+    let page: Int
+    let pages: Int
+    let total: Int
+    let comments: [AgentCommentSnapshot]
+
+    init(
+        comicID: String,
+        parentID: String?,
+        page: Int,
+        pages: Int,
+        total: Int,
+        comments: [AgentCommentSnapshot]
+    ) {
+        self.comicID = AgentCommentSnapshot.boundedIdentifier(comicID)
+        self.parentID = parentID.map(AgentCommentSnapshot.boundedIdentifier)
+        self.page = max(1, page)
+        self.pages = max(1, pages)
+        self.total = max(0, total)
+        self.comments = Array(comments.filter { !$0.commentID.isEmpty }.prefix(20))
+    }
+}
+
 /// Minimal favorite item; remote thumbnails and transport fields are deliberately omitted.
 nonisolated struct AgentFavoriteItem: Equatable, Sendable, Identifiable {
     let comicID: String
@@ -281,6 +369,10 @@ nonisolated enum AgentCommand: Equatable, Sendable {
     case updateIncludedWord(oldWord: String, newWord: String, commandID: String)
     case removeIncludedWord(word: String, commandID: String)
     case deleteOfflineComic(comicID: String, commandID: String)
+    case commentPage(comicID: String, parentID: String?, page: Int)
+    case mutateComment(comicID: String, mutation: CommentMutation, commandID: String)
+
+
 
     var name: String {
         switch self {
@@ -308,6 +400,10 @@ nonisolated enum AgentCommand: Equatable, Sendable {
         case .updateIncludedWord: return "updateIncludedWord"
         case .removeIncludedWord: return "removeIncludedWord"
         case .deleteOfflineComic: return "deleteOfflineComic"
+        case .commentPage: return "commentPage"
+        case .mutateComment: return "mutateComment"
+
+
         }
     }
 }
@@ -372,6 +468,13 @@ nonisolated enum AgentConfirmationPreview: Equatable, Sendable {
     )
     case includedWordRemove(displayValue: String, normalizedKey: String)
     case deleteOfflineComic(comicID: String, comicTitle: String)
+    case commentMutation(
+        comicID: String,
+        commentID: String?,
+        operation: String,
+        content: String?,
+        targetExcerpt: String?
+    )
 }
 nonisolated enum AgentCommandResult: Equatable, Sendable {
     case context(AgentBaseSnapshot)
@@ -389,6 +492,8 @@ nonisolated enum AgentCommandResult: Equatable, Sendable {
     case desiredStateApplied(comicID: String, isLiked: Bool?, isFavorited: Bool?)
     case blockedWords(snapshot: BlockedWordSnapshot, operation: String?)
     case deletedOfflineComic(comicID: String)
+    case commentPage(AgentCommentPageSnapshot)
+    case commentMutationApplied(comicID: String, commentID: String?, operation: String)
     case requiresConfirmation(AgentConfirmationPreview)
     case loginRequired
     case capabilityRequired
@@ -436,6 +541,18 @@ nonisolated enum AgentRedactor {
                 commandName: command.name,
                 allowedFields: ["revision", "normalizedKey", "displayValue", "operation"],
                 excludedFields: excluded + ["user", "favorites", "offlineLibrary", "downloads", "imageData"]
+            )
+        case .commentPage:
+            return AgentPromptProjection(
+                commandName: command.name,
+                allowedFields: ["comicID", "parentID", "page", "comments"],
+                excludedFields: excluded + ["avatar", "user", "token", "password", "rawJSON", "privateFields"]
+            )
+        case .mutateComment:
+            return AgentPromptProjection(
+                commandName: command.name,
+                allowedFields: ["comicID", "commentID", "operation", "content", "targetExcerpt"],
+                excludedFields: excluded + ["avatar", "user", "rawJSON", "privateFields"]
             )
         }
     }
@@ -505,9 +622,96 @@ nonisolated enum AgentResultProjector {
                 "normalizedKey=\($0.normalizedKey); displayValue=\($0.displayValue)"
             }.joined(separator: "\n")
             return "operation=\(operation ?? "list"); revision=\(snapshot.revision)\n\(rules)"
+        case (.commentPage, let .commentPage(snapshot)):
+            return commentPageProjection(snapshot)
+        case (.mutateComment, let .commentMutationApplied(comicID, commentID, operation)):
+            return jsonProjection([
+                "kind": "comment_mutation",
+                "comic_id": comicID,
+                "comment_id": commentID ?? NSNull(),
+                "operation": operation
+            ])
         default:
             return nil
         }
+    }
+
+    private static let maximumCommentProjectionBytes = 48 * 1024
+
+    private static func commentPageProjection(_ snapshot: AgentCommentPageSnapshot) -> String {
+        var rows: [[String: Any]] = []
+        rows.reserveCapacity(snapshot.comments.count)
+        let overhead = encodedJSON(commentPageObject(snapshot, rows: [], truncated: false))?.count
+            ?? maximumCommentProjectionBytes
+        var remaining = max(0, maximumCommentProjectionBytes - overhead - 16)
+        var truncated = false
+        for comment in snapshot.comments {
+            let row = commentRow(comment)
+            let separator = rows.isEmpty ? 0 : 1
+            guard let rowBytes = encodedJSON(row)?.count, rowBytes + separator <= remaining else {
+                truncated = true
+                break
+            }
+            rows.append(row)
+            remaining -= rowBytes + separator
+        }
+        truncated = truncated || rows.count < snapshot.comments.count
+        let object = commentPageObject(snapshot, rows: rows, truncated: truncated)
+        guard let data = encodedJSON(object),
+              data.count <= maximumCommentProjectionBytes,
+              let value = String(data: data, encoding: .utf8) else {
+            return #"{"source":"external_untrusted_comment_data","returned":0,"truncated":true}"#
+        }
+        return value
+    }
+
+    private static func commentPageObject(
+        _ snapshot: AgentCommentPageSnapshot,
+        rows: [[String: Any]],
+        truncated: Bool
+    ) -> [String: Any] {
+        [
+            "source": "external_untrusted_comment_data",
+            "comic_id": snapshot.comicID,
+            "parent_id": snapshot.parentID ?? NSNull(),
+            "page": snapshot.page,
+            "pages": snapshot.pages,
+            "total": snapshot.total,
+            "returned": rows.count,
+            "truncated": truncated,
+            "comments": rows
+        ]
+    }
+
+    private static func commentRow(_ comment: AgentCommentSnapshot) -> [String: Any] {
+        var row: [String: Any] = [
+            "comment_id": comment.commentID,
+            "hidden": comment.isHidden
+        ]
+        if !comment.isHidden {
+            row["parent_id"] = comment.parentID ?? NSNull()
+            row["display_name"] = comment.displayName
+            row["content"] = comment.content
+            row["created_at"] = comment.createdAt
+            row["likes_count"] = comment.likesCount
+            row["replies_count"] = comment.repliesCount
+            row["is_top"] = comment.isTop
+        }
+        return row
+    }
+
+    private static func jsonProjection(_ object: [String: Any]) -> String {
+        guard let data = encodedJSON(object),
+              data.count <= maximumCommentProjectionBytes,
+              let value = String(data: data, encoding: .utf8) else {
+            return #"{"source":"external_untrusted_comment_data","truncated":true}"#
+        }
+        return value
+    }
+
+    private static func encodedJSON(_ object: [String: Any]) -> Data? {
+        guard JSONSerialization.isValidJSONObject(object) else { return nil }
+        return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 
     private static func pageContentProjection(_ content: AgentPageContentSnapshot) -> String {

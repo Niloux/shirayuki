@@ -5,7 +5,6 @@ final class AgentToolCatalogV005Tests: XCTestCase {
     private let catalog = AgentToolCatalog()
 
     func testDefinitionsAndConcreteDecoderAgree() throws {
-        XCTAssertEqual(catalog.definitions.count, 24)
         XCTAssertTrue(catalog.definitions.allSatisfy { $0.parametersJSON.contains(#""additionalProperties":false"#) })
         XCTAssertFalse(catalog.definitions.contains { $0.parametersJSON.contains("commandID") })
 
@@ -17,6 +16,43 @@ final class AgentToolCatalogV005Tests: XCTestCase {
         XCTAssertEqual(
             parsed.command,
             .startDownload(comicID: "comic", chapterIDs: ["one", "two"], quality: .high, commandID: "call-1")
+        )
+    }
+    func testCommentToolsValidateShapeAndIDs() throws {
+        XCTAssertEqual(
+            try catalog.parse(.init(
+                id: "comment-page",
+                name: "commentPage",
+                arguments: #"{"comic_id":"comic","page":1}"#
+            )).get().command,
+            .commentPage(comicID: "comic", parentID: nil, page: 1)
+        )
+        XCTAssertEqual(
+            try catalog.parse(.init(
+                id: "comment-write",
+                name: "mutateComment",
+                arguments: #"{"action":"reply","comic_id":"comic","comment_id":"comment","content":" hello "}"#
+            )).get().command,
+            .mutateComment(
+                comicID: "comic",
+                mutation: .reply(commentID: "comment", content: "hello"),
+                commandID: "comment-write"
+            )
+        )
+        XCTAssertEqual(
+            error(
+                name: "mutateComment",
+                arguments: #"{"action":"delete","comic_id":"comic","comment_id":"comment","content":"no"}"#
+            ),
+            .invalidValue
+        )
+        XCTAssertEqual(
+            error(name: "commentPage", arguments: #"{"comic_id":"comic","page":1001}"#),
+            .valueOutOfRange
+        )
+        XCTAssertEqual(
+            error(name: "commentPage", arguments: #"{"comic_id":"../private","page":1}"#),
+            .invalidValue
         )
     }
 

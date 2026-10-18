@@ -391,6 +391,162 @@ nonisolated struct ComicDetail: Decodable, Identifiable, Sendable {
 nonisolated struct ComicDetailsResponse: Decodable, Sendable {
     let comic: ComicDetail
 }
+// MARK: - Comments
+/// Compact user identity embedded in a comment.
+nonisolated struct CommentUser: Decodable, Sendable {
+    let name: String
+    let title: String
+    let avatar: ImageDetail?
+
+    enum CodingKeys: String, CodingKey {
+        case name, title, avatar
+    }
+
+    init(name: String, title: String, avatar: ImageDetail?) {
+        self.name = name
+        self.title = title
+        self.avatar = avatar
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        avatar = try container.decodeIfPresent(ImageDetail.self, forKey: .avatar)
+    }
+
+    var isEmpty: Bool {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (avatar?.url.isEmpty ?? true)
+    }
+}
+
+/// One read-only comment or reply returned by PicACG.
+nonisolated struct PicaComment: Decodable, Identifiable, Sendable {
+    let id: String
+    let content: String
+    let user: CommentUser?
+    let createdAt: String
+    let likesCount: Int
+    let repliesCount: Int
+    let isTop: Bool
+    let isHidden: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case rawID = "_id"
+        case id
+        case content
+        case rawUser = "_user"
+        case user
+        case createdAt = "created_at"
+        case createdAtCamel = "createdAt"
+        case likesCount
+        case likesCountSnake = "likes_count"
+        case likes
+        case totalComments
+        case commentsCount
+        case isTop
+        case hide
+    }
+
+    init(
+        id: String,
+        content: String,
+        user: CommentUser?,
+        createdAt: String,
+        likesCount: Int,
+        repliesCount: Int,
+        isTop: Bool,
+        isHidden: Bool
+    ) {
+        self.id = id
+        self.content = content
+        self.user = user
+        self.createdAt = createdAt
+        self.likesCount = max(0, likesCount)
+        self.repliesCount = max(0, repliesCount)
+        self.isTop = isTop
+        self.isHidden = isHidden
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let primaryID = try container.decodeLossyStringIfPresent(forKey: .rawID)
+        let fallbackID = try container.decodeLossyStringIfPresent(forKey: .id)
+        guard let decodedID = (primaryID?.isEmpty == false ? primaryID : fallbackID),
+              !decodedID.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .rawID,
+                in: container,
+                debugDescription: "Comment is missing an id"
+            )
+        }
+
+        id = decodedID
+        isHidden = try container.decodeIfPresent(Bool.self, forKey: .hide) ?? false
+        if isHidden {
+            // Never retain server-supplied private fields for hidden comments.
+            content = ""
+            user = nil
+        } else {
+            content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+            let decodedUser = try container.decodeIfPresent(CommentUser.self, forKey: .rawUser)
+                ?? container.decodeIfPresent(CommentUser.self, forKey: .user)
+            user = decodedUser?.isEmpty == true ? nil : decodedUser
+        }
+        createdAt = try container.decodeLossyStringIfPresent(forKey: .createdAt)
+            ?? container.decodeLossyStringIfPresent(forKey: .createdAtCamel)
+            ?? ""
+        likesCount = max(
+            0,
+            try container.decodeLossyIntIfPresent(forKey: .likesCount)
+                ?? container.decodeLossyIntIfPresent(forKey: .likesCountSnake)
+                ?? container.decodeLossyIntIfPresent(forKey: .likes)
+                ?? 0
+        )
+        repliesCount = max(
+            0,
+            try container.decodeLossyIntIfPresent(forKey: .totalComments)
+                ?? container.decodeLossyIntIfPresent(forKey: .commentsCount)
+                ?? 0
+        )
+        isTop = try container.decodeIfPresent(Bool.self, forKey: .isTop) ?? false
+    }
+}
+
+/// One page of comments or replies.
+nonisolated struct PicaCommentsPage: Decodable, Sendable {
+    let docs: [PicaComment]
+    let page: Int
+    let pages: Int
+    let total: Int
+
+    enum CodingKeys: String, CodingKey {
+        case docs, page, pages, total
+    }
+
+    init(docs: [PicaComment], page: Int, pages: Int, total: Int) {
+        self.docs = docs
+        self.page = max(1, page)
+        self.pages = max(1, pages)
+        self.total = max(0, total)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        docs = try container.decodeIfPresent([PicaComment].self, forKey: .docs) ?? []
+        page = max(1, try container.decodeLossyIntIfPresent(forKey: .page) ?? 1)
+        pages = max(1, try container.decodeLossyIntIfPresent(forKey: .pages) ?? 1)
+        total = max(0, try container.decodeLossyIntIfPresent(forKey: .total) ?? 0)
+    }
+}
+
+/// Response payload wrapping a page of comments.
+nonisolated struct PicaCommentsResponse: Decodable, Sendable {
+    let comments: PicaCommentsPage
+}
+
 
 extension ComicDetail {
     init(offlineRecord record: OfflineComicRecord) {

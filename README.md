@@ -31,6 +31,10 @@
 - **分类**：网格浏览全部分类，支持点击进入分类漫画列表
 - **搜索**：关键词搜索、热门搜索词、历史记录（上限 20 条）、排序筛选
 - **漫画详情**：完整元数据、创作者信息、标签、点赞、收藏、阅读进度、章节列表（支持正序 / 倒序 / 折叠）、推荐漫画
+- **评论**：详情页「查看评论」卡片进入评论区，支持置顶标记、长文展开、发表评论及二级回复。
+  - 一级评论到达顶部/底部后继续滑动约 72pt，松开切换上一页/下一页；工具栏提供刷新。二级回复保留分页按钮与下拉刷新。
+  - 登录且漫画允许评论时可发送；输入上限为 2000 字及 64 KiB，失败保留草稿，成功清空并刷新。关闭发表的漫画仍可查看已有评论。
+  - 单页替换、懒渲染、128px 头像降采样，不累计历史页；支持拖动手势与 VoiceOver 翻页。
 - **阅读器**：
   - 纵向滚动 / 横向翻页双模式
   - 双击 / 捏合缩放
@@ -40,7 +44,7 @@
   - 在线 / 离线阅读，支持按章节下载、下载进度与本地书库
 - **个人中心**：用户信息、EXP / 等级、收藏浏览、每日打卡
 - **设置**：主题、多语言、动画模式、Agent 浮动按钮样式/透明度、远程漫画屏蔽词与只选词、API 线路与图片质量、缓存与 Agent 会话管理，以及 OpenAI Chat Completions / Responses、Anthropic Messages 兼容配置；默认使用 DeepSeek `deepseek-chat`，支持 Ask / YOLO、风险权限授权、自动上下文压缩开关和 64–384 KiB 阈值
-- **Agent 助手**：所有非设置页面提供可拖动浮动入口；Codex 风格对话实时显示 user/assistant/tool 消息及具体 transport 错误，助手回复安全解析 Markdown；Agent 可读取首页、日/周/月榜、分类漫画的默认前 12 项，页面已加载较多结果时受最近 100 项滑动窗口约束，以及当前漫画详情；获授权后可修改屏蔽词/只选词、收藏状态并删除离线漫画。Reader 当前页图片始终单独确认
+- **Agent 助手**：所有非设置页面提供可拖动浮动入口；Codex 风格对话实时显示 user/assistant/tool 消息及具体 transport 错误，助手回复安全解析 Markdown；Agent 可读取首页、日/周/月榜、分类漫画的默认前 12 项，页面已加载较多结果时受最近 100 项滑动窗口约束，以及当前漫画详情。评论通过 `commentPage` 按需读取，通过 `mutateComment` 发表、回复、删除、切换点赞或举报；获授权后也可修改屏蔽词/只选词、收藏状态并删除离线漫画。Reader 当前页图片始终单独确认。
 - **本地 Agent 历史**：会话按匿名用户/Pica 账号隔离，可恢复、逐个删除或从 Agent 设置页二次确认后全部删除
 
 ## 文件结构
@@ -76,6 +80,8 @@
 - Agent 只有在用户明确确认后才会读取并发送当前阅读页图片。
 - 使用自定义 OpenAI-compatible 或 Anthropic-compatible endpoint 时，应用会显示目标 host 并要求隐私确认；仅发送用户请求和 typed command 所需的最小化、已脱敏上下文与结果，当前阅读页图片仍需另行明确确认。
 - Agent 会话历史保存在本机 Application Support，并按匿名用户/Pica 账号隔离；应用生成的 API Key、Token、图片、data URL 与 capability 不写入历史。用户主动输入的文本会原样保存。
+- Agent 的所有评论写操作均属于风险操作：关闭风险授权时，Ask / YOLO 均拒绝执行；开启后，Ask 展示操作、目标与完整提交内容供确认，YOLO 按现有授权自动执行。
+- 评论读取仅针对当前/已授权漫画；操作已有评论须先在同一会话取得对应评论 ID。隐藏正文与身份不向模型发送，评论文本视为不可信外部数据，不能据其指令执行工具。单次结果最多 20 条、48 KiB，已知评论授权记录最多保留 100 条。
 
 ## 开发说明
 
@@ -85,12 +91,13 @@
 
 - 纯原生 API 客户端，所有数据均通过官方 REST API 获取。
 - 支持 iOS 17+ / macOS 14+，构建工具要求 Swift 5.9+。
+- 评论界面与 Agent 共用 [`CommentRepository`](Shirayuki/Services/CommentRepository.swift) 的分页读取和 `CommentMutation` 写接口。成功写入会使可见评论页刷新；写请求不自动重试，网络失败后应先刷新确认，避免重复发送。
+- 评论删除使用 `POST comments/{id}/delete`，是否允许删除/隐藏由服务端权限决定；拒绝或业务失败不会显示为成功。该接口可能仅供管理使用，参见 [pica-go 的 `HideComment` 接口说明](https://github.com/niuhuan/pica-go/blob/master/client.go)。
 
 待修复 & 添加：
 
 - [ ] 添加 AI 翻译功能
 - [ ] 阅读页稳定性优化
-- [ ] 评论区显示，懒加载和界面性能
 
 ## 许可证
 
@@ -114,4 +121,5 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 ## 参考
 
 - [haka_comic](https://github.com/raoxwup/haka_comic)：接口实现、UI
+- [pica-go](https://github.com/niuhuan/pica-go)：评论写入、回复及删除/隐藏接口参考
 - [Apple Liquid Glass](https://developer.apple.com/documentation/SwiftUI/Landmarks-Building-an-app-with-Liquid-Glass)：UI

@@ -52,12 +52,29 @@ struct AgentPageCapabilityRegistry {
 @MainActor
 final class AgentCommandService {
 
+    private struct KnownCommentRecord {
+        let comicID: String
+        let parentID: String?
+        let excerpt: String
+        let isHidden: Bool
+    }
+
+    private struct CommentMutationCacheEntry {
+        let comicID: String
+        let mutation: CommentMutation
+    }
+
     private struct SessionState {
         var knownComicIDs = Set<String>()
         var localComicIDs = Set<String>()
         var knownChapterIDs: [String: Set<String>] = [:]
+        var knownComments: [String: KnownCommentRecord] = [:]
+        var knownCommentOrder: [String] = []
+        var inFlightCommentCommandIDs = Set<String>()
+        var authorizationEpoch = UUID()
         var capabilityRegistry = AgentPageCapabilityRegistry()
         var confirmedResults: [String: AgentCommandResult] = [:]
+        var confirmedCommentPayloads: [String: CommentMutationCacheEntry] = [:]
     }
 
     private let navigation: AppNavigationCoordinator
@@ -66,6 +83,7 @@ final class AgentCommandService {
     private let downloadProvider: any AgentDownloadProvider
     private let blockedWords: UserDefaultsBlockedWordRepository
     private let pageContent: AgentPageContentStore
+    private let commentRepository: any CommentRepository
     private let chapterProvider: (String) async throws -> [PicaChapter]
     private let comicDetailProvider: (String) async throws -> ComicDetail
     private let deleteOfflineComicProvider: (String) async throws -> Void
@@ -106,6 +124,7 @@ final class AgentCommandService {
         downloadProvider: any AgentDownloadProvider = DefaultAgentDownloadProvider(),
         blockedWords: UserDefaultsBlockedWordRepository? = nil,
         pageContent: AgentPageContentStore? = nil,
+        commentRepository: any CommentRepository = PicaCommentRepository(),
         sessionIsLoggedIn: @escaping () -> Bool,
         llmConfiguration: @escaping () -> LLMConfiguration? = { nil },
         llmHasAPIKey: @escaping () -> Bool = { false },
@@ -121,6 +140,7 @@ final class AgentCommandService {
         self.downloadProvider = downloadProvider
         self.blockedWords = blockedWords
         self.pageContent = pageContent ?? AgentPageContentStore()
+        self.commentRepository = commentRepository
         self.chapterProvider = chapterProvider ?? { id in
             try await PicaAPIService.shared.fetchChapters(id: id)
         }
@@ -139,6 +159,12 @@ final class AgentCommandService {
             for id in self.states.keys {
                 self.states[id]?.knownComicIDs.removeAll()
                 self.states[id]?.knownChapterIDs.removeAll()
+                self.states[id]?.knownComments.removeAll()
+                self.states[id]?.knownCommentOrder.removeAll()
+                self.states[id]?.confirmedResults.removeAll()
+                self.states[id]?.confirmedCommentPayloads.removeAll()
+                self.states[id]?.inFlightCommentCommandIDs.removeAll()
+                self.states[id]?.authorizationEpoch = UUID()
             }
         }.store(in: &cancellables)
     }
@@ -205,11 +231,27 @@ final class AgentCommandService {
         turnID: String? = nil
     ) async -> AgentCommandResult {
         activeSessionID = sessionID
-        if let commandID = commandID(for: command), let previous = confirmedResults[commandID] {
-            return previous
-        }
         if Self.requiresRiskAuthorization(command), !riskAuthorizationEnabled() {
             return .failure(.riskAuthorizationRequired)
+        }
+        if case .mutateComment = command, !sessionIsLoggedIn() {
+            return .loginRequired
+        }
+        if let commandID = commandID(for: command),
+           let previous = states[sessionID]?.confirmedResults[commandID] {
+            if case let .mutateComment(comicID, mutation, _) = command {
+                guard let payload = states[sessionID]?.confirmedCommentPayloads[commandID],
+                      payload.comicID == comicID,
+                      payload.mutation == mutation,
+                      validCommentMutationInput(comicID: comicID, mutation: mutation, commandID: commandID),
+                      isAuthorizedCommentMutation(comicID: comicID, mutation: mutation, sessionID: sessionID) else {
+                    return .failure(.invalidIdentifier)
+                }
+            }
+            return previous
+        }
+        if states[sessionID] == nil {
+            states[sessionID] = SessionState()
         }
 
         let result: AgentCommandResult
@@ -350,6 +392,21 @@ final class AgentCommandService {
             } catch {
                 result = .failure(.pageImageUnavailable)
             }
+        case let .commentPage(comicID, parentID, page):
+            result = await commentPage(
+                comicID: comicID,
+                parentID: parentID,
+                page: page,
+                sessionID: sessionID
+            )
+        case let .mutateComment(comicID, mutation, commandID):
+            result = await mutateComment(
+                comicID: comicID,
+                mutation: mutation,
+                commandID: commandID,
+                sessionID: sessionID,
+                confirmed: confirmed
+            )
         case let .startDownload(comicID, chapterIDs, quality, _):
             guard sessionIsLoggedIn() else { result = .loginRequired; break }
             guard isAuthorizedComicID(comicID) else {
@@ -444,11 +501,22 @@ final class AgentCommandService {
         case let .removeIncludedWord(word, _):
             result = await mutateIncludedWordRemove(word: word, confirmed: confirmed)
         }
-        if let commandID = commandID(for: command), confirmed, isSuccessfulSideEffect(result) {
-            confirmedResults[commandID] = result
-            if confirmedResults.count > 256, let first = confirmedResults.keys.first {
-                confirmedResults.removeValue(forKey: first)
+        if let commandID = commandID(for: command),
+           confirmed,
+           isSuccessfulSideEffect(result),
+           var state = states[sessionID] {
+            state.confirmedResults[commandID] = result
+            if case let .mutateComment(comicID, mutation, _) = command {
+                state.confirmedCommentPayloads[commandID] = CommentMutationCacheEntry(
+                    comicID: comicID,
+                    mutation: mutation
+                )
             }
+            if state.confirmedResults.count > 256, let first = state.confirmedResults.keys.first {
+                state.confirmedResults.removeValue(forKey: first)
+                state.confirmedCommentPayloads.removeValue(forKey: first)
+            }
+            states[sessionID] = state
         }
         return result
     }
@@ -487,6 +555,239 @@ final class AgentCommandService {
         knownChapterIDs[comicID] = ids
         return ids
     }
+    private func commentPage(
+        comicID: String,
+        parentID: String?,
+        page: Int,
+        sessionID: UUID
+    ) async -> AgentCommandResult {
+        guard sessionIsLoggedIn() else { return .loginRequired }
+        guard let epoch = states[sessionID]?.authorizationEpoch else {
+            return .failure(.invalidIdentifier)
+        }
+        guard (1...1_000).contains(page) else { return .failure(.invalidPage) }
+        guard validCommentIdentifier(comicID),
+              isAuthorizedComicID(comicID, sessionID: sessionID) else {
+            return .failure(.invalidIdentifier)
+        }
+        if let parentID {
+            guard validCommentIdentifier(parentID),
+                  let known = states[sessionID]?.knownComments[parentID],
+                  known.comicID == comicID,
+                  !known.isHidden else {
+                return .failure(.invalidIdentifier)
+            }
+        }
+        do {
+            let response = try await commentRepository.comments(
+                comicID: comicID,
+                parentID: parentID,
+                page: page
+            )
+            guard states[sessionID]?.authorizationEpoch == epoch else {
+                return .failure(.invalidIdentifier)
+            }
+            guard sessionIsLoggedIn() else { return .loginRequired }
+            let returnedDocs = response.docs
+                .prefix(20)
+                .filter { validCommentIdentifier($0.id) }
+            let snapshots = returnedDocs.map { comment in
+                AgentCommentSnapshot(
+                    commentID: comment.id,
+                    parentID: parentID,
+                    displayName: comment.user?.name ?? "",
+                    content: comment.content,
+                    createdAt: comment.createdAt,
+                    likesCount: comment.likesCount,
+                    repliesCount: comment.repliesCount,
+                    isTop: comment.isTop,
+                    isHidden: comment.isHidden
+                )
+            }
+            rememberComments(Array(returnedDocs), comicID: comicID, parentID: parentID, sessionID: sessionID)
+            return .commentPage(
+                AgentCommentPageSnapshot(
+                    comicID: comicID,
+                    parentID: parentID,
+                    page: response.page,
+                    pages: response.pages,
+                    total: response.total,
+                    comments: snapshots
+                )
+            )
+        } catch let error as CommentOperationError {
+            switch error {
+            case .invalidIdentifier: return .failure(.invalidIdentifier)
+            default: return .failure(.providerFailure)
+            }
+        } catch {
+            return .failure(.providerFailure)
+        }
+    }
+
+    private func mutateComment(
+        comicID: String,
+        mutation: CommentMutation,
+        commandID: String,
+        sessionID: UUID,
+        confirmed: Bool
+    ) async -> AgentCommandResult {
+        guard let epoch = states[sessionID]?.authorizationEpoch else {
+            return .failure(.invalidIdentifier)
+        }
+        guard sessionIsLoggedIn(),
+              validCommentIdentifier(comicID),
+              validCommentIdentifier(commandID),
+              isAuthorizedComicID(comicID, sessionID: sessionID) else {
+            return sessionIsLoggedIn()
+                ? .failure(.invalidIdentifier)
+                : .loginRequired
+        }
+        let target: KnownCommentRecord?
+        if let commentID = mutation.commentID {
+            guard validCommentIdentifier(commentID),
+                  let known = states[sessionID]?.knownComments[commentID],
+                  known.comicID == comicID,
+                  !known.isHidden else {
+                return .failure(.invalidIdentifier)
+            }
+            target = known
+        } else {
+            target = nil
+        }
+        do {
+            if let content = mutation.content {
+                _ = try CommentInput.validatedContent(content)
+            }
+        } catch {
+            return .failure(.invalidIdentifier)
+        }
+        if !confirmed {
+            return .requiresConfirmation(
+                .commentMutation(
+                    comicID: comicID,
+                    commentID: mutation.commentID,
+                    operation: mutation.operation,
+                    content: mutation.content.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) },
+                    targetExcerpt: target?.excerpt
+                )
+            )
+        }
+        guard reserveCommentMutation(commandID, sessionID: sessionID) else {
+            return .failure(.invalidIdentifier)
+        }
+        defer { releaseCommentMutation(commandID, sessionID: sessionID) }
+        do {
+            try await commentRepository.perform(comicID: comicID, mutation: mutation)
+            guard states[sessionID]?.authorizationEpoch == epoch else {
+                return .failure(.invalidIdentifier)
+            }
+            guard sessionIsLoggedIn() else { return .loginRequired }
+            return .commentMutationApplied(
+                comicID: comicID,
+                commentID: mutation.commentID,
+                operation: mutation.operation
+            )
+        } catch let error as CommentOperationError {
+            switch error {
+            case .invalidIdentifier: return .failure(.invalidIdentifier)
+            default: return .failure(.providerFailure)
+            }
+        } catch {
+            return .failure(.providerFailure)
+        }
+    }
+
+    private func reserveCommentMutation(_ commandID: String, sessionID: UUID) -> Bool {
+        guard var state = states[sessionID],
+              !state.inFlightCommentCommandIDs.contains(commandID) else {
+            return false
+        }
+        state.inFlightCommentCommandIDs.insert(commandID)
+        states[sessionID] = state
+        return true
+    }
+
+    private func releaseCommentMutation(_ commandID: String, sessionID: UUID) {
+        guard var state = states[sessionID] else { return }
+        state.inFlightCommentCommandIDs.remove(commandID)
+        states[sessionID] = state
+    }
+
+    private func rememberComments(
+        _ comments: [PicaComment],
+        comicID: String,
+        parentID: String?,
+        sessionID: UUID
+    ) {
+        guard var state = states[sessionID] else { return }
+        for comment in comments {
+            state.knownComments.removeValue(forKey: comment.id)
+            state.knownCommentOrder.removeAll { $0 == comment.id }
+            guard validCommentIdentifier(comment.id) else { continue }
+            state.knownComments[comment.id] = KnownCommentRecord(
+                comicID: comicID,
+                parentID: parentID,
+                excerpt: comment.isHidden
+                    ? ""
+                    : AgentCommentSnapshot.boundedText(comment.content, maxBytes: 1_024, maxCharacters: 240),
+                isHidden: comment.isHidden
+            )
+            state.knownCommentOrder.append(comment.id)
+        }
+        while state.knownCommentOrder.count > 100 {
+            let evicted = state.knownCommentOrder.removeFirst()
+            state.knownComments.removeValue(forKey: evicted)
+        }
+        states[sessionID] = state
+    }
+
+    private func validCommentIdentifier(_ value: String) -> Bool {
+        do {
+            try CommentInput.validateIdentifier(value)
+            return true
+        } catch {
+            return false
+        }
+    }
+    private func validCommentMutationInput(
+        comicID: String,
+        mutation: CommentMutation,
+        commandID: String
+    ) -> Bool {
+        guard validCommentIdentifier(comicID), validCommentIdentifier(commandID) else { return false }
+        if let commentID = mutation.commentID, !validCommentIdentifier(commentID) {
+            return false
+        }
+        if let content = mutation.content {
+            do {
+                _ = try CommentInput.validatedContent(content)
+            } catch {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func isAuthorizedCommentMutation(
+        comicID: String,
+        mutation: CommentMutation,
+        sessionID: UUID
+    ) -> Bool {
+        guard validCommentIdentifier(comicID),
+              isAuthorizedComicID(comicID, sessionID: sessionID) else {
+            return false
+        }
+        guard let commentID = mutation.commentID else { return true }
+        guard let known = states[sessionID]?.knownComments[commentID] else { return false }
+        return known.comicID == comicID && !known.isHidden
+    }
+
+
+    private func isAuthorizedComicID(_ comicID: String, sessionID: UUID) -> Bool {
+        states[sessionID]?.knownComicIDs.contains(comicID) == true || currentComicID == comicID
+    }
+
     private func downloadConfirmation(
         comicID: String,
         chapterIDs: [String],
@@ -822,7 +1123,8 @@ final class AgentCommandService {
              .removeBlockedWord,
              .addIncludedWord,
              .updateIncludedWord,
-             .removeIncludedWord:
+             .removeIncludedWord,
+             .mutateComment:
             true
         default:
             false
@@ -832,7 +1134,7 @@ final class AgentCommandService {
     private func isSuccessfulSideEffect(_ result: AgentCommandResult) -> Bool {
         switch result {
         case .queuedDownload, .cancelledDownload, .deletedOfflineComic,
-             .desiredStateApplied, .blockedWords:
+             .desiredStateApplied, .blockedWords, .commentMutationApplied:
             true
         default:
             false
@@ -861,7 +1163,8 @@ final class AgentCommandService {
              let .removeBlockedWord(_, commandID),
              let .addIncludedWord(_, commandID),
              let .updateIncludedWord(_, _, commandID),
-             let .removeIncludedWord(_, commandID):
+             let .removeIncludedWord(_, commandID),
+             let .mutateComment(_, _, commandID):
             commandID
         default:
             nil

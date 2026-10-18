@@ -60,6 +60,82 @@ actor PicaAPIService {
         let response: BaseResponse<ComicDetailsResponse> = try await APIClient.shared.request(.get, path: "comics/\(id)")
         return response.data.comic
     }
+    /// Fetches one page of comments for a comic.
+    func fetchComicComments(id: String, page: Int) async throws -> PicaCommentsPage {
+        let response: BaseResponse<PicaCommentsResponse> = try await APIClient.shared.request(
+            .get,
+            path: "comics/\(id)/comments",
+            query: ["page": String(page)]
+        )
+        return response.data.comments
+    }
+
+    /// Fetches one page of replies for a comment.
+    func fetchCommentReplies(id: String, page: Int) async throws -> PicaCommentsPage {
+        let response: BaseResponse<PicaCommentsResponse> = try await APIClient.shared.request(
+            .get,
+            path: "comments/\(id)/childrens",
+            query: ["page": String(page)]
+        )
+        return response.data.comments
+    }
+    /// Posts a top-level comment for a comic.
+    func postComment(comicID: String, content: String) async throws {
+        let response: CommentWriteResponse = try await APIClient.shared.request(
+            .post,
+            path: "comics/\(comicID)/comments",
+            body: CommentContentPayload(content: content),
+            retry: false
+        )
+        try response.validate()
+    }
+
+    /// Posts a reply to an existing comment.
+    func postCommentReply(commentID: String, content: String) async throws {
+        let response: CommentWriteResponse = try await APIClient.shared.request(
+            .post,
+            path: "comments/\(commentID)",
+            body: CommentContentPayload(content: content),
+            retry: false
+        )
+        try response.validate()
+    }
+
+    /// Deletes a comment using the server's permission rules.
+    func deleteComment(id: String) async throws {
+        let response: CommentWriteResponse = try await APIClient.shared.request(
+            .post,
+            path: "comments/\(id)/delete",
+            retry: false
+        )
+        try response.validate()
+    }
+
+    /// Toggles the authenticated user's like state for a comment.
+    func toggleCommentLike(id: String) async throws -> ActionResponse {
+        let response: BaseResponse<ActionResponse> = try await APIClient.shared.request(
+            .post,
+            path: "comments/\(id)/like",
+            body: [String: String](),
+            retry: false
+        )
+        guard response.code == 200 else {
+            throw APIError.serverError(response.code, response.message)
+        }
+        return response.data
+    }
+
+    /// Reports a comment; the server determines the account's report permissions.
+    func reportComment(id: String) async throws {
+        let response: CommentWriteResponse = try await APIClient.shared.request(
+            .post,
+            path: "comments/\(id)/report",
+            body: [String: String](),
+            retry: false
+        )
+        try response.validate()
+    }
+
     
     /// Fetches and combines every chapter page for a comic.
     func fetchChapters(id: String) async throws -> [PicaChapter] {
@@ -260,3 +336,17 @@ actor PicaAPIService {
 // MARK: - Helpers
 /// Empty data marker used by successful mutation responses.
 nonisolated struct EmptyResponse: Decodable, Sendable {}
+
+/// Write endpoints may omit data or return null; only the business result decides success.
+nonisolated struct CommentWriteResponse: Decodable, Sendable {
+    let code: Int
+    let message: String
+
+    func validate() throws {
+        guard code == 200 else { throw APIError.serverError(code, message) }
+    }
+}
+
+private nonisolated struct CommentContentPayload: Encodable, Sendable {
+    let content: String
+}

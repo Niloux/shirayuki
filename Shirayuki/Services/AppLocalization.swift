@@ -1602,6 +1602,240 @@ nonisolated private enum AppLocalizationCatalog {
             .english: "Finished",
             .japanese: "完結"
         ],
+        "comments.title": [
+            .simplifiedChinese: "评论",
+            .traditionalChinese: "評論",
+            .english: "Comments",
+            .japanese: "コメント"
+        ],
+        "comments.entry": [
+            .simplifiedChinese: "查看评论",
+            .traditionalChinese: "查看評論",
+            .english: "View Comments",
+            .japanese: "コメントを見る"
+        ],
+        "comments.entry.count": [
+            .simplifiedChinese: "%d 条评论",
+            .traditionalChinese: "%d 則評論",
+            .english: "%d comments",
+            .japanese: "%d件のコメント"
+        ],
+        "comments.replies": [
+            .simplifiedChinese: "回复",
+            .traditionalChinese: "回覆",
+            .english: "Replies",
+            .japanese: "返信"
+        ],
+        "comments.replies.count": [
+            .simplifiedChinese: "查看 %d 条回复",
+            .traditionalChinese: "查看 %d 則回覆",
+            .english: "View %d replies",
+            .japanese: "%d件の返信を見る"
+        ],
+        "comments.empty": [
+            .simplifiedChinese: "暂无评论",
+            .traditionalChinese: "暫無評論",
+            .english: "No comments yet",
+            .japanese: "コメントはまだありません"
+        ],
+        "comments.replies.empty": [
+            .simplifiedChinese: "暂无回复",
+            .traditionalChinese: "暫無回覆",
+            .english: "No replies yet",
+            .japanese: "返信はまだありません"
+        ],
+        "comments.hidden": [
+            .simplifiedChinese: "这条评论已被隐藏",
+            .traditionalChinese: "這則評論已被隱藏",
+            .english: "This comment is hidden",
+            .japanese: "このコメントは非表示です"
+        ],
+        "comments.unknownUser": [
+            .simplifiedChinese: "未知用户",
+            .traditionalChinese: "未知用戶",
+            .english: "Unknown user",
+            .japanese: "不明なユーザー"
+        ],
+        "comments.pinned": [
+            .simplifiedChinese: "置顶",
+            .traditionalChinese: "置頂",
+            .english: "Pinned",
+            .japanese: "固定"
+        ],
+        "comments.previous": [
+            .simplifiedChinese: "上一页",
+            .traditionalChinese: "上一頁",
+            .english: "Previous",
+            .japanese: "前のページ"
+        ],
+        "comments.next": [
+            .simplifiedChinese: "下一页",
+            .traditionalChinese: "下一頁",
+            .english: "Next",
+            .japanese: "次のページ"
+        ],
+        "comments.page": [
+            .simplifiedChinese: "第 %d / %d 页",
+            .traditionalChinese: "第 %d / %d 頁",
+            .english: "Page %d of %d",
+            .japanese: "%d / %dページ"
+        ],
+        "comments.total": [
+            .simplifiedChinese: "共 %d 条",
+            .traditionalChinese: "共 %d 則",
+            .english: "%d total",
+            .japanese: "全%d件"
+        ],
+        "comments.expand": [
+            .simplifiedChinese: "展开全文",
+            .traditionalChinese: "展開全文",
+            .english: "Show more",
+            .japanese: "全文を表示"
+        ],
+        "comments.collapse": [
+            .simplifiedChinese: "收起",
+            .traditionalChinese: "收起",
+            .english: "Show less",
+            .japanese: "折りたたむ"
+        ],
+        "comments.swipe.next": [
+            .simplifiedChinese: "继续上滑，查看下一页",
+            .traditionalChinese: "繼續上滑，查看下一頁",
+            .english: "Swipe up further for the next page",
+            .japanese: "さらに上にスワイプして次のページへ"
+        ],
+        "comments.swipe.previous": [
+            .simplifiedChinese: "继续下滑，查看上一页",
+            .traditionalChinese: "繼續下滑，查看上一頁",
+            .english: "Swipe down further for the previous page",
+            .japanese: "さらに下にスワイプして前のページへ"
+        ],
+        "comments.swipe.nextReady": [
+            .simplifiedChinese: "松开查看下一页",
+            .traditionalChinese: "放開查看下一頁",
+            .english: "Release for the next page",
+            .japanese: "指を離して次のページへ"
+        ],
+        "comments.swipe.previousReady": [
+            .simplifiedChinese: "松开查看上一页",
+            .traditionalChinese: "放開查看上一頁",
+            .english: "Release for the previous page",
+            .japanese: "指を離して前のページへ"
+        ],
+        "comments.swipe.first": [
+            .simplifiedChinese: "已是第一页",
+            .traditionalChinese: "已是第一頁",
+            .english: "First page",
+            .japanese: "最初のページです"
+        ],
+        "comments.swipe.last": [
+            .simplifiedChinese: "已是最后一页",
+            .traditionalChinese: "已是最後一頁",
+            .english: "Last page",
+            .japanese: "最後のページです"
+        ],
+        "comments.compose.placeholder": [
+            .simplifiedChinese: "写下你的评论…",
+            .traditionalChinese: "寫下你的評論…",
+            .english: "Write a comment…",
+            .japanese: "コメントを入力…"
+        ],
+        "comments.compose.replyPlaceholder": [
+            .simplifiedChinese: "写下你的回复…",
+            .traditionalChinese: "寫下你的回覆…",
+            .english: "Write a reply…",
+            .japanese: "返信を入力…"
+        ],
+        "comments.compose.send": [
+            .simplifiedChinese: "发送",
+            .traditionalChinese: "傳送",
+            .english: "Send",
+            .japanese: "送信"
+        ],
+        "comments.compose.sending": [
+            .simplifiedChinese: "正在发送…",
+            .traditionalChinese: "正在傳送…",
+            .english: "Sending…",
+            .japanese: "送信中…"
+        ],
+        "comments.compose.loginRequired": [
+            .simplifiedChinese: "登录后可发表评论",
+            .traditionalChinese: "登入後可發表評論",
+            .english: "Sign in to comment",
+            .japanese: "コメントするにはログインしてください"
+        ],
+        "comments.compose.disabled": [
+            .simplifiedChinese: "该漫画已关闭评论发表，仍可查看已有评论",
+            .traditionalChinese: "此漫畫已關閉評論發表，仍可查看現有評論",
+            .english: "New comments are disabled. Existing comments remain available.",
+            .japanese: "投稿は無効ですが、既存のコメントは閲覧できます"
+        ],
+        "comments.compose.limit": [
+            .simplifiedChinese: "%d / %d 字",
+            .traditionalChinese: "%d / %d 字",
+            .english: "%d / %d characters",
+            .japanese: "%d / %d文字"
+        ],
+        "comments.compose.sent": [
+            .simplifiedChinese: "发送成功",
+            .traditionalChinese: "傳送成功",
+            .english: "Sent",
+            .japanese: "送信しました"
+        ],
+        "comments.error.empty": [
+            .simplifiedChinese: "评论内容不能为空",
+            .traditionalChinese: "評論內容不能為空",
+            .english: "Comment cannot be empty",
+            .japanese: "コメントを入力してください"
+        ],
+        "comments.error.contentTooLong": [
+            .simplifiedChinese: "评论超过本应用的内容上限（2000 字或 64 KiB）",
+            .traditionalChinese: "評論超過本應用程式的內容上限（2000 字或 64 KiB）",
+            .english: "Comment exceeds this app’s content limit (2,000 characters or 64 KiB)",
+            .japanese: "アプリの投稿上限（2000文字または64 KiB）を超えています"
+        ],
+        "comments.error.invalidIdentifier": [
+            .simplifiedChinese: "评论或漫画标识无效",
+            .traditionalChinese: "評論或漫畫識別碼無效",
+            .english: "Invalid comment or comic identifier",
+            .japanese: "コメントまたは作品のIDが無効です"
+        ],
+        "comments.error.disabled": [
+            .simplifiedChinese: "该漫画不允许发表评论或回复",
+            .traditionalChinese: "此漫畫不允許發表評論或回覆",
+            .english: "Comments and replies are disabled for this comic",
+            .japanese: "この作品へのコメントと返信は無効です"
+        ],
+        "comments.action.post": [
+            .simplifiedChinese: "发表评论",
+            .traditionalChinese: "發表評論",
+            .english: "Post comment",
+            .japanese: "コメントを投稿"
+        ],
+        "comments.action.reply": [
+            .simplifiedChinese: "回复评论",
+            .traditionalChinese: "回覆評論",
+            .english: "Reply to comment",
+            .japanese: "コメントに返信"
+        ],
+        "comments.action.delete": [
+            .simplifiedChinese: "删除评论（以服务端权限为准）",
+            .traditionalChinese: "刪除評論（以伺服器權限為準）",
+            .english: "Delete comment (server permission required)",
+            .japanese: "コメントを削除（サーバーの権限が必要）"
+        ],
+        "comments.action.toggleLike": [
+            .simplifiedChinese: "切换评论点赞",
+            .traditionalChinese: "切換評論按讚",
+            .english: "Toggle comment like",
+            .japanese: "コメントのいいねを切り替え"
+        ],
+        "comments.action.report": [
+            .simplifiedChinese: "举报评论",
+            .traditionalChinese: "檢舉評論",
+            .english: "Report comment",
+            .japanese: "コメントを通報"
+        ],
         "detail.title": [
             .simplifiedChinese: "漫画详情",
             .traditionalChinese: "漫畫詳情",

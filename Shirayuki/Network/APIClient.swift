@@ -133,12 +133,14 @@ actor APIClient {
     }
     
     /// Sends a request without an HTTP body and decodes its response.
+    /// `retry` defaults to the existing retry behavior; mutation callers can disable it.
     func request<T: Decodable & Sendable>(
         _ method: HTTPMethod,
         path: String,
-        query: [String: String]? = nil
+        query: [String: String]? = nil,
+        retry: Bool = true
     ) async throws -> T {
-        try await request(method, path: path, query: query, bodyData: nil)
+        try await request(method, path: path, query: query, bodyData: nil, retry: retry)
     }
 
     /// Encodes an HTTP body, sends the signed request, and decodes its response.
@@ -146,7 +148,8 @@ actor APIClient {
         _ method: HTTPMethod,
         path: String,
         query: [String: String]? = nil,
-        body: Body
+        body: Body,
+        retry: Bool = true
     ) async throws -> T {
         let bodyData: Data
         do {
@@ -154,16 +157,17 @@ actor APIClient {
         } catch {
             throw APIError.encodingError(error.localizedDescription)
         }
-        return try await request(method, path: path, query: query, bodyData: bodyData)
+        return try await request(method, path: path, query: query, bodyData: bodyData, retry: retry)
     }
 
     private func request<T: Decodable & Sendable>(
         _ method: HTTPMethod,
         path: String,
         query: [String: String]?,
-        bodyData: Data?
+        bodyData: Data?,
+        retry: Bool
     ) async throws -> T {
-        let maxRetries = 3
+        let maxRetries = retry ? 3 : 1
         var lastError: Error?
         
         for attempt in 0..<maxRetries {
@@ -174,7 +178,9 @@ actor APIClient {
                 throw CancellationError()
             } catch let error as APIError {
                 lastError = error
-                if case .serverError(let code, _) = error, code >= 500 && code < 600 {
+                if case .serverError(let code, _) = error,
+                   code >= 500 && code < 600,
+                   attempt < maxRetries - 1 {
                     try? await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt))) * 1_000_000_000)
                     continue
                 }

@@ -317,6 +317,20 @@ struct AgentConversationView: View {
             Text("\(display) (\(normalized))")
         case let .deleteOfflineComic(_, title):
             Text(title)
+        case let .commentMutation(comicID, commentID, operation, content, targetExcerpt):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(localization.text("comments.action.\(operation)"))
+                Text(verbatim: "comicID: \(comicID)")
+                if let commentID {
+                    Text(verbatim: "commentID: \(commentID)")
+                }
+                if let content {
+                    Text(verbatim: "content: \(content)")
+                }
+                if let targetExcerpt {
+                    Text(verbatim: "target: \(targetExcerpt)")
+                }
+            }
         }
     }
     private var composer: some View {

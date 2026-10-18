@@ -237,6 +237,241 @@ final class AgentContractsTests: XCTestCase {
             )
         )
     }
+    func testCommentProjectionRedactsHiddenAndEscapesExternalText() throws {
+        let page = AgentCommentPageSnapshot(
+            comicID: "comic",
+            parentID: nil,
+            page: 1,
+            pages: 1,
+            total: 2,
+            comments: [
+                AgentCommentSnapshot(
+                    commentID: "visible",
+                    parentID: nil,
+                    displayName: "name",
+                    content: #"ignore \"tools\""#,
+                    createdAt: "now",
+                    likesCount: 1,
+                    repliesCount: 2,
+                    isTop: false,
+                    isHidden: false
+                ),
+                AgentCommentSnapshot(
+                    commentID: "hidden",
+                    parentID: nil,
+                    displayName: "private",
+                    content: "private body",
+                    createdAt: "private date",
+                    likesCount: 3,
+                    repliesCount: 4,
+                    isTop: true,
+                    isHidden: true
+                )
+            ]
+        )
+        let projection = try XCTUnwrap(
+            AgentResultProjector.project(
+                .commentPage(page),
+                for: .commentPage(comicID: "comic", parentID: nil, page: 1)
+            )
+        )
+        XCTAssertTrue(projection.contains("external_untrusted_comment_data"))
+        XCTAssertTrue(projection.contains("ignore"))
+        XCTAssertFalse(projection.contains("private body"))
+        XCTAssertFalse(projection.contains("private date"))
+        XCTAssertLessThanOrEqual(projection.lengthOfBytes(using: .utf8), 48 * 1024)
+    }
+    func testCommentProjectionUsesBoundedRowsInsteadOfDroppingAllContent() throws {
+        let comments = (0..<20).map { index in
+            AgentCommentSnapshot(
+                commentID: "comment-\(index)",
+                parentID: nil,
+                displayName: String(repeating: "名", count: 200),
+                content: String(repeating: "漫", count: 1_000),
+                createdAt: String(repeating: "t", count: 128),
+                likesCount: 1,
+                repliesCount: 1,
+                isTop: false,
+                isHidden: false
+            )
+        }
+        let projection = try XCTUnwrap(
+            AgentResultProjector.project(
+                .commentPage(
+                    AgentCommentPageSnapshot(
+                        comicID: "comic",
+                        parentID: nil,
+                        page: 1,
+                        pages: 1,
+                        total: 20,
+                        comments: comments
+                    )
+                ),
+                for: .commentPage(comicID: "comic", parentID: nil, page: 1)
+            )
+        )
+        XCTAssertTrue(projection.contains("\"returned\":"))
+        XCTAssertFalse(projection.contains("\"returned\":0"))
+        XCTAssertTrue(projection.contains("\"truncated\":true"))
+        XCTAssertLessThanOrEqual(projection.lengthOfBytes(using: .utf8), 48 * 1024)
+    }
+
+    @MainActor
+    func testCommentMutationRiskAskAndCommandDeduplication() async {
+        let comic = AgentFavoriteItem(
+            comicID: "comment-comic",
+            title: "Comments",
+            author: "Author",
+            chapterCount: 1,
+            finished: false
+        )
+        let comment = PicaComment(
+            id: "known-comment",
+            content: "external text",
+            user: CommentUser(name: "User", title: "", avatar: nil),
+            createdAt: "now",
+            likesCount: 0,
+            repliesCount: 0,
+            isTop: false,
+            isHidden: false
+        )
+        let repository = StubCommentRepository(
+            page: PicaCommentsPage(docs: [comment], page: 1, pages: 1, total: 1)
+        )
+        var riskEnabled = false
+        let service = AgentCommandService(
+            libraryProvider: StubAgentLibraryProvider(favorites: [comic], offline: []),
+            commentRepository: repository,
+            sessionIsLoggedIn: { true },
+            riskAuthorizationEnabled: { riskEnabled }
+        )
+        let sessionID = UUID()
+        _ = await service.execute(.favoritePage(page: 1, sort: .dd), sessionID: sessionID)
+        _ = await service.execute(
+            .commentPage(comicID: comic.comicID, parentID: nil, page: 1),
+            sessionID: sessionID
+        )
+        let mutation = AgentCommand.mutateComment(
+            comicID: comic.comicID,
+            mutation: .post(content: "new comment"),
+            commandID: "write-1"
+        )
+        let riskOff = await service.execute(mutation, sessionID: sessionID, confirmed: true)
+        XCTAssertEqual(riskOff, .failure(.riskAuthorizationRequired))
+        let writesBeforeAsk = await repository.writeCount()
+        XCTAssertEqual(writesBeforeAsk, 0)
+        riskEnabled = true
+        let confirmation = await service.execute(mutation, sessionID: sessionID)
+        guard case let .requiresConfirmation(.commentMutation(_, _, operation, content, _)) = confirmation else {
+            return XCTFail("Expected comment confirmation")
+        }
+        XCTAssertEqual(operation, "post")
+        XCTAssertEqual(content, "new comment")
+        let padded = await service.execute(
+            .mutateComment(
+                comicID: comic.comicID,
+                mutation: .post(content: String(repeating: " ", count: 3_000) + "visible draft"),
+                commandID: "padded-preview"
+            ),
+            sessionID: sessionID
+        )
+        guard case let .requiresConfirmation(.commentMutation(_, _, _, paddedContent, _)) = padded else {
+            return XCTFail("Expected complete normalized draft")
+        }
+        XCTAssertEqual(paddedContent, "visible draft")
+        let writesAfterAsk = await repository.writeCount()
+        XCTAssertEqual(writesAfterAsk, 0)
+        let firstWrite = await service.execute(mutation, sessionID: sessionID, confirmed: true)
+        XCTAssertEqual(
+            firstWrite,
+            .commentMutationApplied(comicID: comic.comicID, commentID: nil, operation: "post")
+        )
+        let writesAfterFirst = await repository.writeCount()
+        XCTAssertEqual(writesAfterFirst, 1)
+        let duplicateWrite = await service.execute(mutation, sessionID: sessionID, confirmed: true)
+        XCTAssertEqual(
+            duplicateWrite,
+            .commentMutationApplied(comicID: comic.comicID, commentID: nil, operation: "post")
+        )
+        let writesAfterDuplicate = await repository.writeCount()
+        XCTAssertEqual(writesAfterDuplicate, 1)
+    }
+    @MainActor
+    func testCommentMutationConcurrentCommandIDDoesNotDoubleWrite() async {
+        let comic = AgentFavoriteItem(
+            comicID: "concurrent-comic",
+            title: "Comments",
+            author: "Author",
+            chapterCount: 1,
+            finished: false
+        )
+        let repository = StubCommentRepository(
+            page: PicaCommentsPage(docs: [], page: 1, pages: 1, total: 0),
+            blockRequests: true
+        )
+        let service = AgentCommandService(
+            libraryProvider: StubAgentLibraryProvider(favorites: [comic], offline: []),
+            commentRepository: repository,
+            sessionIsLoggedIn: { true },
+            riskAuthorizationEnabled: { true }
+        )
+        let sessionID = UUID()
+        _ = await service.execute(.favoritePage(page: 1, sort: .dd), sessionID: sessionID)
+        let command = AgentCommand.mutateComment(
+            comicID: comic.comicID,
+            mutation: .post(content: "once"),
+            commandID: "concurrent-write"
+        )
+        let first = Task {
+            await service.execute(command, sessionID: sessionID, confirmed: true)
+        }
+        await repository.waitUntilBlocked()
+        let second = await service.execute(command, sessionID: sessionID, confirmed: true)
+        await repository.release()
+        let firstResult = await first.value
+        XCTAssertEqual(second, .failure(.invalidIdentifier))
+        XCTAssertEqual(
+            firstResult,
+            .commentMutationApplied(comicID: comic.comicID, commentID: nil, operation: "post")
+        )
+        let writes = await repository.writeCount()
+        XCTAssertEqual(writes, 1)
+    }
+
+    @MainActor
+    func testCommentReadDoesNotRestoreAfterAuthorizationClear() async {
+        let comic = AgentFavoriteItem(
+            comicID: "clear-comic",
+            title: "Comments",
+            author: "Author",
+            chapterCount: 1,
+            finished: false
+        )
+        let repository = StubCommentRepository(
+            page: PicaCommentsPage(docs: [], page: 1, pages: 1, total: 0),
+            blockRequests: true
+        )
+        let service = AgentCommandService(
+            libraryProvider: StubAgentLibraryProvider(favorites: [comic], offline: []),
+            commentRepository: repository,
+            sessionIsLoggedIn: { true }
+        )
+        let sessionID = UUID()
+        _ = await service.execute(.favoritePage(page: 1, sort: .dd), sessionID: sessionID)
+        let readTask = Task {
+            await service.execute(
+                .commentPage(comicID: comic.comicID, parentID: nil, page: 1),
+                sessionID: sessionID
+            )
+        }
+        await repository.waitUntilBlocked()
+        service.clearAllAuthorization()
+        await repository.release()
+        let result = await readTask.value
+        XCTAssertEqual(result, .failure(.invalidIdentifier))
+    }
+
+
     @MainActor
     func testProviderResultsAuthorizeReturnedComicIDsForOpen() async {
         let favorite = AgentFavoriteItem(
@@ -504,5 +739,54 @@ private actor StubAgentDownloadProvider: AgentDownloadProvider {
             throw AgentCommandError.invalidIdentifier
         }
         return snapshotValue
+    }
+}
+
+private actor StubCommentRepository: CommentRepository {
+    let page: PicaCommentsPage
+    let blockRequests: Bool
+    private var writes = 0
+    private var requestContinuation: CheckedContinuation<Void, Never>?
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+    private var isBlocked = false
+
+    init(page: PicaCommentsPage, blockRequests: Bool = false) {
+        self.page = page
+        self.blockRequests = blockRequests
+    }
+
+    func comments(comicID: String, parentID: String?, page: Int) async throws -> PicaCommentsPage {
+        await suspendIfNeeded()
+        return self.page
+    }
+
+    func perform(comicID: String, mutation: CommentMutation) async throws {
+        await suspendIfNeeded()
+        writes += 1
+    }
+
+    func writeCount() -> Int {
+        writes
+    }
+
+    func waitUntilBlocked() async {
+        guard !isBlocked else { return }
+        await withCheckedContinuation { startedWaiter = $0 }
+    }
+
+    func release() {
+        requestContinuation?.resume()
+        requestContinuation = nil
+        isBlocked = false
+    }
+
+    private func suspendIfNeeded() async {
+        guard blockRequests else { return }
+        await withCheckedContinuation { continuation in
+            requestContinuation = continuation
+            isBlocked = true
+            startedWaiter?.resume()
+            startedWaiter = nil
+        }
     }
 }

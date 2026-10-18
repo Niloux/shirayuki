@@ -13,6 +13,7 @@ final class AgentCommandLoopExecutor: AgentLoopCommandExecutor {
         self.executionMode = executionMode
     }
 
+    @MainActor
     func execute(
         _ command: AgentCommand,
         sessionID: UUID,

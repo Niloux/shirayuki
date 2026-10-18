@@ -40,6 +40,7 @@ struct ComicDetailView: View {
                     tagSection(title: localization.text("detail.section.categories"), values: comic.categories)
                     tagSection(title: localization.text("detail.section.tags"), values: comic.tags)
                     actionSection(comic: comic)
+                    commentsEntry(comic: comic)
                     readProgressSection
                     chapterSection
                     recommendationSection
@@ -280,6 +281,46 @@ struct ComicDetailView: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.white.opacity(0.05), lineWidth: 1)
         )
+        .padding(.horizontal, 16)
+    }
+
+    private func commentsEntry(comic: ComicDetail) -> some View {
+        NavigationLink {
+            ComicCommentsView(comicID: comicId, allowComment: comic.allowComment)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "text.bubble.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 40, height: 40)
+                    .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(localization.text("comments.entry"))
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(localization.text("comments.entry.count", comic.commentsCount))
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(0.05), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("comicCommentsEntry")
         .padding(.horizontal, 16)
     }
 
