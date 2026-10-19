@@ -49,6 +49,16 @@ enum ComicsBrowserSource: Hashable, Identifiable, Sendable {
             return AppLocalization.text("browser.empty.favorites.subtitle")
         }
     }
+
+    /// Favorites only honor date ordering; comic-list sources accept every sort code.
+    var supportedSorts: [ComicSortType] {
+        switch self {
+        case .category, .author, .chineseTeam:
+            return ComicSortType.allCases
+        case .favorites:
+            return [.dd, .da]
+        }
+    }
 }
 
 /// Loads and paginates comics for a configured browser source.
@@ -61,6 +71,7 @@ final class ComicsBrowserViewModel: ObservableViewModel {
     @Published var totalPages = 1
     @Published private(set) var lastLoadedPageIDs: [String] = []
     @Published private(set) var lastEvaluatedBlockedRevision: UInt64 = 0
+    @Published private(set) var sort: ComicSortType = .dd
     
     let source: ComicsBrowserSource
     /// Bumped per request so a refresh discards any page response still in flight.
@@ -106,6 +117,13 @@ final class ComicsBrowserViewModel: ObservableViewModel {
         }
     }
 
+    /// Switches the server-side ordering and reloads from page 1.
+    func setSort(_ newSort: ComicSortType) async {
+        guard newSort != sort, source.supportedSorts.contains(newSort) else { return }
+        sort = newSort
+        await load(reset: true)
+    }
+
     func loadNextPage() async {
         guard !isLoading, currentPage < totalPages else { return }
         await load()
@@ -121,18 +139,18 @@ final class ComicsBrowserViewModel: ObservableViewModel {
         switch source {
         case .category(let category):
             return try await api.fetchComics(
-                payload: ComicsPayload(page: page, c: category, s: .dd, t: nil, a: nil, ct: nil, ca: nil)
+                payload: ComicsPayload(page: page, c: category, s: sort, t: nil, a: nil, ct: nil, ca: nil)
             )
         case .author(let author):
             return try await api.fetchComics(
-                payload: ComicsPayload(page: page, c: nil, s: .dd, t: nil, a: author, ct: nil, ca: nil)
+                payload: ComicsPayload(page: page, c: nil, s: sort, t: nil, a: author, ct: nil, ca: nil)
             )
         case .chineseTeam(let team):
             return try await api.fetchComics(
-                payload: ComicsPayload(page: page, c: nil, s: .dd, t: nil, a: nil, ct: team, ca: nil)
+                payload: ComicsPayload(page: page, c: nil, s: sort, t: nil, a: nil, ct: team, ca: nil)
             )
         case .favorites:
-            return try await api.fetchFavoriteComics(page: page, sort: .dd)
+            return try await api.fetchFavoriteComics(page: page, sort: sort)
         }
     }
 
@@ -212,6 +230,11 @@ struct ComicsBrowserView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.large)
         #endif
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                sortMenu
+            }
+        }
         .navigationDestination(item: $selectedComicId) { comicId in
             ComicDetailView(comicId: comicId)
         }
@@ -257,6 +280,26 @@ struct ComicsBrowserView: View {
             ),
             ownerID: pageContentOwnerID
         )
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker(
+                localization.text("search.filter.sort"),
+                selection: Binding(
+                    get: { viewModel.sort },
+                    set: { newSort in Task { await viewModel.setSort(newSort) } }
+                )
+            ) {
+                ForEach(source.supportedSorts) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+        }
+        .accessibilityLabel(localization.text("search.filter.sort"))
+        .accessibilityIdentifier("browserSortMenu")
     }
 
     private var visibleComics: [ComicSummary] {
