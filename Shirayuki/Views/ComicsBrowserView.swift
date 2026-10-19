@@ -4,12 +4,18 @@ import SwiftUI
 /// Data source represented by the shared paginated comic browser.
 enum ComicsBrowserSource: Hashable, Identifiable, Sendable {
     case category(String)
+    case author(String)
+    case chineseTeam(String)
     case favorites
     
     var id: String {
         switch self {
         case .category(let name):
             return "category:\(name)"
+        case .author(let name):
+            return "author:\(name)"
+        case .chineseTeam(let name):
+            return "chineseTeam:\(name)"
         case .favorites:
             return "favorites"
         }
@@ -17,7 +23,7 @@ enum ComicsBrowserSource: Hashable, Identifiable, Sendable {
     
     var title: String {
         switch self {
-        case .category(let name):
+        case .category(let name), .author(let name), .chineseTeam(let name):
             return name
         case .favorites:
             return AppLocalization.text("browser.favorites.title")
@@ -26,7 +32,7 @@ enum ComicsBrowserSource: Hashable, Identifiable, Sendable {
     
     var emptyTitle: String {
         switch self {
-        case .category:
+        case .category, .author, .chineseTeam:
             return AppLocalization.text("browser.empty.comics")
         case .favorites:
             return AppLocalization.text("browser.empty.favorites")
@@ -37,6 +43,8 @@ enum ComicsBrowserSource: Hashable, Identifiable, Sendable {
         switch self {
         case .category(let name):
             return AppLocalization.text("browser.empty.category.subtitle", name)
+        case .author(let name), .chineseTeam(let name):
+            return AppLocalization.text("browser.empty.creator.subtitle", name)
         case .favorites:
             return AppLocalization.text("browser.empty.favorites.subtitle")
         }
@@ -85,6 +93,30 @@ final class ComicsBrowserViewModel: ObservableViewModel {
                         ca: nil
                     )
                 )
+            case .author(let author):
+                result = try await PicaAPIService.shared.fetchComics(
+                    payload: ComicsPayload(
+                        page: currentPage,
+                        c: nil,
+                        s: .dd,
+                        t: nil,
+                        a: author,
+                        ct: nil,
+                        ca: nil
+                    )
+                )
+            case .chineseTeam(let team):
+                result = try await PicaAPIService.shared.fetchComics(
+                    payload: ComicsPayload(
+                        page: currentPage,
+                        c: nil,
+                        s: .dd,
+                        t: nil,
+                        a: nil,
+                        ct: team,
+                        ca: nil
+                    )
+                )
             case .favorites:
                 result = try await PicaAPIService.shared.fetchFavoriteComics(page: currentPage, sort: .dd)
             }
@@ -129,7 +161,7 @@ final class ComicsBrowserViewModel: ObservableViewModel {
     }
 }
 
-/// Shared list screen for categories and account favorites.
+/// Shared list screen for categories, creators, and account favorites.
 struct ComicsBrowserView: View {
     let source: ComicsBrowserSource
 
@@ -215,6 +247,8 @@ struct ComicsBrowserView: View {
     private func publishAgentPageContent() {
         let sourceName = switch source {
         case let .category(name): "category.\(name)"
+        case let .author(name): "author.\(name)"
+        case let .chineseTeam(name): "chineseTeam.\(name)"
         case .favorites: "favorites"
         }
         agentPageContent.publish(
